@@ -1,0 +1,5 @@
+lightspark
+langchain
+langchain-openai
+langgraph
+python-dotenv
