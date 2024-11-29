@@ -1,0 +1,3 @@
+lightspark
+crewai
+python-dotenv
