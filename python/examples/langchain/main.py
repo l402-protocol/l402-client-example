@@ -51,7 +51,7 @@ lightning_pay_tool = StructuredTool(
 )
 
 # Initialize LLM and agent
-llm = ChatOpenAI(model="gpt-4")
+llm = ChatOpenAI(model="gpt-4o")
 
 tools = [lightning_pay_tool]
 langgraph_agent_executor = create_react_agent(llm, tools)
@@ -59,7 +59,7 @@ langgraph_agent_executor = create_react_agent(llm, tools)
 # Let's manually create a test invoice
 test_invoice = lightspark_client.create_test_mode_invoice(
     local_node_id=default_node_id,
-    amount_msats=42000,
+    amount_msats=10,
     memo="Pizza!",
 )
 
