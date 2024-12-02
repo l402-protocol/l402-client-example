@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from crewai import Agent, Task, Crew
 from lightspark import LightsparkSyncClient
 from crewai_tools import BaseTool
+import requests
+import sys
 
 load_dotenv()
 
@@ -16,65 +18,71 @@ node_password = os.getenv("LIGHTSPARK_NODE_PASSWORD")
 signing_key = client.recover_node_signing_key(node_id, node_password)
 client.load_node_signing_key(node_id, signing_key)
 
+
+base_url="http://stock.l402.org"
+response = requests.get(f"{base_url}/signup")
+user_id = response.json()["id"]
+headers = {"Authorization": f"Bearer {user_id}"}
+
+
 # Simple tool implementations
-class CreateInvoiceTool(BaseTool):
-    name: str = "create_invoice"
-    description: str = "Create a Lightning Network test invoice"
 
-    def _run(self, amount_msats: int = 50000, memo: str = "Test Payment"):
-        return client.create_test_mode_invoice(
-            local_node_id=node_id,
-            amount_msats=amount_msats,
-            memo=memo,
-        )
 
-class PayInvoiceTool(BaseTool):
-    name: str = "pay_invoice"
-    description: str = "Pay a Lightning Network invoice"
+class GetTickerTool(BaseTool):
+    name: str = "get_ticker"
+    description: str = "Get the current price of a stock"
 
-    def _run(self, invoice: str):
-        return client.pay_invoice(
-            node_id=node_id,
-            encoded_invoice=invoice,
-            timeout_secs=60,
-            maximum_fees_msats=1000,
-        )
+    def _run(self, symbol: str):
+        response = requests.get(f"{base_url}/ticker/{symbol}", headers=headers)
+        if response.status_code == 402:
+            # Get the lightning invoice from the first offer (cheapest)
+            payment_info = response.json()["offers"][0]
+            lightning_payment = next(
+                pm for pm in payment_info["payment_methods"] 
+                if pm["payment_type"] == "lightning"
+            )
+            invoice = lightning_payment["payment_details"]["payment_request"]
+            
+            # Pay the invoice
+            client.pay_invoice(
+                node_id=node_id,
+                encoded_invoice=invoice,
+                timeout_secs=60,
+                maximum_fees_msats=1000,
+            )
+            
+            # Retry the ticker request
+            response = requests.get(f"{base_url}/ticker/{symbol}", headers=headers)
+        
+        return response.json()
 
-# Create agents
-invoice_creator = Agent(
-    role="Invoice Creator",
-    goal="Create Lightning Network invoices for payments",
-    backstory="You are an expert at creating Lightning Network invoices.",
-    tools=[CreateInvoiceTool()],
-    verbose=True,
+# Create an agent that can compare stock prices
+financial_analyst = Agent(
+    name="Financial Analyst",
+    role="Analyze financial data and provide insights",
+    goal="Compare stock prices and determine which is higher",
+    backstory="An AI agent specialized in financial analysis",
+    tools=[GetTickerTool()],
 )
 
-invoice_payer = Agent(
-    role="Invoice Payer",
-    goal="Process Lightning Network payments efficiently",
-    backstory="You are specialized in processing Lightning Network payments.",
-    tools=[PayInvoiceTool()],
-    verbose=True,
+task_description = sys.argv[1] if len(sys.argv) > 1 else """Compare the stock prices of Tesla (TSLA) and Microsoft (MSFT)."""
+
+
+# Example task to compare stocks
+task = Task(
+    description=task_description,
+    expected_output="Analysis result",
+    agent=financial_analyst
 )
 
-# Create tasks
-create_invoice_task = Task(
-    description="Create a test invoice for 20 sats with the memo 'Test Payment'",
-    expected_output="A Lightning Network invoice string",
-    agent=invoice_creator
-)
-
-pay_invoice_task = Task(
-    description="Pay the Lightning Network invoice that was created",
-    expected_output="Payment confirmation details",
-    agent=invoice_payer
-)
-
-# Run the crew
+# Create and run the crew
 crew = Crew(
-    agents=[invoice_creator, invoice_payer],
-    tasks=[create_invoice_task, pay_invoice_task],
-    verbose=True
+    agents=[financial_analyst],
+    tasks=[task],
+    verbose=True,
 )
 
 result = crew.kickoff()
+print(result)
+
+
