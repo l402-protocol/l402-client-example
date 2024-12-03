@@ -1,91 +1,125 @@
 import os
+import sys
+import requests
+
 from dotenv import load_dotenv
-from lightspark import LightsparkSyncClient
+
 from openai import OpenAI
+from lightspark import LightsparkSyncClient
 
 load_dotenv()
 
-# Setup Lightspark client
-client = LightsparkSyncClient(
-    api_token_client_id=os.getenv("LIGHTSPARK_API_TOKEN_CLIENT_ID"),
-    api_token_client_secret=os.getenv("LIGHTSPARK_API_TOKEN_CLIENT_SECRET"),
-)
-node_id = os.getenv("LIGHTSPARK_NODE_ID")
-node_password = os.getenv("LIGHTSPARK_NODE_PASSWORD")
-signing_key = client.recover_node_signing_key(node_id, node_password)
-client.load_node_signing_key(node_id, signing_key)
+def setup_lightspark_client():
+    # Initialize client
+    client = LightsparkSyncClient(
+        api_token_client_id=os.getenv("LIGHTSPARK_API_TOKEN_CLIENT_ID"),
+        api_token_client_secret=os.getenv("LIGHTSPARK_API_TOKEN_CLIENT_SECRET"),
+    )
+    
+    # Load node credentials
+    node_id = os.getenv("LIGHTSPARK_NODE_ID")
+    node_password = os.getenv("LIGHTSPARK_NODE_PASSWORD")
+    
+    # Recover and load signing key
+    signing_key = client.recover_node_signing_key(node_id, node_password)
+    client.load_node_signing_key(node_id, signing_key)
+    
+    return client, node_id
 
-# Create a test invoice
-test_invoice = client.create_test_mode_invoice(
-    local_node_id=node_id,
-    amount_msats=42000,
-    memo="Pizza!",
-)
+client, node_id = setup_lightspark_client()
 
-# Setup OpenAI client
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Setup L402 client
+BASE_URL = "http://stock.l402.org"
+
+def signup():
+    response = requests.get(f"{BASE_URL}/signup")
+    return response.json()["id"]
+
+def get_headers(user_id):
+    return {"Authorization": f"Bearer {user_id}"}
+
+user_id = signup()
+headers = get_headers(user_id)
 
 # Function that OpenAI can call
-def pay_invoice(invoice: str) -> str:
+def get_stock_price(symbol: str) -> str:
     try:
-        payment = client.pay_invoice(
-            node_id=node_id,
-            encoded_invoice=invoice,
-            timeout_secs=60,
-            maximum_fees_msats=1000,
-        )
-        return f"Payment successful: {payment}"
+        response = requests.get(f"{BASE_URL}/ticker/{symbol}", headers=headers)
+        if response.status_code == 402:
+            # Get payment info from response
+            offer = response.json()["offers"][0]
+            invoice = offer["payment_methods"][0]["payment_details"]["payment_request"]
+            
+            # Pay the invoice
+            payment = client.pay_invoice(
+                node_id=node_id,
+                encoded_invoice=invoice,
+                timeout_secs=10,
+                maximum_fees_msats=1000,
+            )
+            
+            # Retry the request
+            response = requests.get(f"{BASE_URL}/ticker/{symbol}", headers=headers)
+        
+        data = response.json()
+        return f"Stock data for {symbol}: {data}"
     except Exception as e:
-        return f"Payment failed: {str(e)}"
+        return f"Failed to get stock price: {str(e)}"
 
 # Define the function for OpenAI
 tools = [
     {
         "type": "function",
         "function": {
-            "name": "pay_invoice",
-            "description": "Pay a Lightning Network invoice",
+            "name": "get_stock_price",
+            "description": "Get stock price information",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "invoice": {
+                    "symbol": {
                         "type": "string",
-                        "description": "The Lightning Network invoice to pay"
+                        "description": "The stock symbol to get price information for"
                     }
                 },
-                "required": ["invoice"]
+                "required": ["symbol"]
             }
         }
     }
 ]
 
-# Create conversation with the AI
-messages = [
-    {"role": "system", "content": "You are a helpful assistant that can pay Lightning Network invoices."},
-    {"role": "user", "content": f"Please pay this Lightning invoice: {test_invoice}"}
-]
+if __name__ == "__main__":
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "Compare the stock prices of Microsoft and Nvidia"
 
-# Get AI response
-response = openai_client.chat.completions.create(
-    model="gpt-4",
-    messages=messages,
-    tools=tools,
-    tool_choice="auto"
-)
+    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Handle the response
-message = response.choices[0].message
-if message.tool_calls:
-    # Execute the function call
-    function_call = message.tool_calls[0]
-    function_args = eval(function_call.function.arguments)
-    result = pay_invoice(function_args['invoice'])
-    
-    # Get final response from AI
-    messages.append(message)
-    messages.append({"role": "tool", "content": result, "tool_call_id": function_call.id})
-    final_response = openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages
-    )
-    print(final_response.choices[0].message.content)
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant that can get stock price information."},
+        {"role": "user", "content": prompt}
+    ]
+
+    while True:
+        # Get AI response
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto"
+        )
+
+        message = response.choices[0].message
+        messages.append(message)
+
+        # Break if no tool calls
+        if not message.tool_calls:
+            print(message.content)
+            break
+
+        # Handle tool calls
+        for tool_call in message.tool_calls:
+            function_args = eval(tool_call.function.arguments)
+            result = get_stock_price(function_args['symbol'])
+            messages.append({
+                "role": "tool",
+                "content": result,
+                "tool_call_id": tool_call.id
+            })

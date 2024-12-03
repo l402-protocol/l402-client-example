@@ -1,13 +1,13 @@
 import os
-from dotenv import load_dotenv
-from lightspark import LightsparkSyncClient
 import requests
 import sys
 
+from dotenv import load_dotenv
+
+from lightspark import LightsparkSyncClient
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain.tools import StructuredTool
-
 from pydantic import BaseModel
 
 load_dotenv()
@@ -29,8 +29,7 @@ def setup_lightspark_client():
     
     return client, node_id
 
-# Setup client and node before LangChain initialization
-lightspark_client, default_node_id = setup_lightspark_client()
+client, node_id = setup_lightspark_client()
 
 BASE_URL = "http://stock.l402.org"
 
@@ -57,8 +56,8 @@ def get_stock_price(symbol: str):
         invoice = offer["payment_methods"][0]["payment_details"]["payment_request"]
         
         # Pay the invoice using our existing lightspark client
-        lightspark_client.pay_invoice(
-            node_id=default_node_id,
+        client.pay_invoice(
+            node_id=node_id,
             encoded_invoice=invoice,
             timeout_secs=10,
             maximum_fees_msats=1000
