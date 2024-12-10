@@ -1,0 +1,4 @@
+lightspark
+aiohttp
+mcp
+python-dotenv
