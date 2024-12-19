@@ -1,5 +1,6 @@
 import os
 import aiohttp
+import httpx
 
 import mcp.types as types
 import mcp.server.stdio
@@ -11,7 +12,7 @@ from lightspark import LightsparkSyncClient
 from dotenv import load_dotenv
 
 # load_dotenv()
-load_dotenv('/Users/pengren/go/github.com/l402-protocol/l402-client-example/mcp/.env')
+load_dotenv('/Users/pengren/go/github.com/l402-protocol/l402-client-example/python/examples/mcp/.env')
 
 def setup_lightspark_client():
     # Initialize client
@@ -79,17 +80,25 @@ async def handle_list_tools() -> list[types.Tool]:
             }
         ),
         types.Tool(
-            name="pay_lightning",
-            description="Pay a Lightning Network invoice using Lightspark",
+            name="pay_offer",
+            description="Pay a Lightning Network invoice for an L402 offer",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "payment_request": {
+                    "offer_id": {
                         "type": "string",
-                        "description": "The Lightning Network payment request/invoice to pay"
+                        "description": "The ID of the offer to pay for"
+                    },
+                    "payment_request_url": {
+                        "type": "string",
+                        "description": "The URL to request the payment invoice"
+                    },
+                    "payment_context_token": {
+                        "type": "string",
+                        "description": "The context token for the payment"
                     }
                 },
-                "required": ["payment_request"]
+                "required": ["offer_id", "payment_request_url", "payment_context_token"]
             }
         )
     ]
@@ -132,14 +141,20 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
                     type="text",
                     text=f"User Info: {data}"
                 )]
-    elif name == "pay_lightning":
-        payment_request = arguments["payment_request"]
+    elif name == "pay_offer":
+        offer_id = arguments["offer_id"]
+        payment_request_url = arguments["payment_request_url"]
+        payment_context_token = arguments["payment_context_token"]
         
+        pi = httpx.post(payment_request_url, json={'offer_id': offer_id, 'payment_method': 'lightning', 'payment_context_token': payment_context_token}).json()
+
+        invoice = pi['payment_request']['lightning_invoice']
+                   
         client, node_id = setup_lightspark_client()
         
         result = client.pay_invoice(
             node_id=node_id,
-            encoded_invoice=payment_request,
+            encoded_invoice=invoice,
             timeout_secs=10,
             maximum_fees_msats=1000,
         )
